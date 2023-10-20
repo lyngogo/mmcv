@@ -18,7 +18,7 @@ from .hooks import (HOOKS, CheckpointHook, ClearMLLoggerHook, ClosureHook,
                     LoggerHook, MlflowLoggerHook, NeptuneLoggerHook,
                     OptimizerHook, PaviLoggerHook, SegmindLoggerHook,
                     SyncBuffersHook, TensorboardLoggerHook, TextLoggerHook,
-                    WandbLoggerHook)
+                    WandbLoggerHook,offsetHook)
 from .hooks.lr_updater import StepLrUpdaterHook  # noqa
 from .hooks.lr_updater import (CosineAnnealingLrUpdaterHook,
                                CosineRestartLrUpdaterHook, CyclicLrUpdaterHook,
@@ -69,5 +69,5 @@ __all__ = [
     'ModuleDict', 'ModuleList', 'GradientCumulativeOptimizerHook',
     'GradientCumulativeFp16OptimizerHook', 'DefaultRunnerConstructor',
     'SegmindLoggerHook', 'LinearAnnealingMomentumUpdaterHook',
-    'LinearAnnealingLrUpdaterHook', 'ClearMLLoggerHook'
+    'LinearAnnealingLrUpdaterHook', 'ClearMLLoggerHook','offsetHook'
 ]

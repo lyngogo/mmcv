@@ -4,6 +4,9 @@ import platform
 import shutil
 import time
 import warnings
+import copy
+import numpy as np
+import cv2
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -14,6 +17,9 @@ from .base_runner import BaseRunner
 from .builder import RUNNERS
 from .checkpoint import save_checkpoint
 from .utils import get_host_info
+from PIL import Image,ImageDraw,ImageFont
+from mmcv.image import tensor2imgs
+
 
 
 @RUNNERS.register_module()
@@ -36,6 +42,8 @@ class EpochBasedRunner(BaseRunner):
             raise TypeError('"batch_processor()" or "model.train_step()"'
                             'and "model.val_step()" must return a dict')
         if 'log_vars' in outputs:
+            # print('**********************')
+            # print(outputs['loss'])
             self.log_buffer.update(outputs['log_vars'], outputs['num_samples'])
         self.outputs = outputs
 
@@ -50,14 +58,158 @@ class EpochBasedRunner(BaseRunner):
             self.data_batch = data_batch
             self._inner_iter = i
             self.call_hook('before_train_iter')
+            self.label = data_batch['gt_bboxes'].data[0]
+            # print(data_batch['img'].data[0].size())
+            # a = data_batch['img'].data[0].device
+
+            # print(self.label)
+            self.shape = data_batch['img_metas'].data[0]
             self.run_iter(data_batch, train_mode=True, **kwargs)
+            # b = self.offsetMaps[list(self.offsetMaps.keys())[0]].device
+            # print(f'{a}:___________{b}')
+            # print(data_batch)
             self.call_hook('after_train_iter')
+            # if self._iter<10 and self._iter%2==0:
+            #     self.draw_somthing(data_batch)
+            # elif self._iter<100 and self._iter%20==0:
+            #     self.draw_somthing(data_batch)
+            # elif self._iter<1000 and self._iter%200==0:
+            #     self.draw_somthing(data_batch)                
+            # elif self._iter%2000==0:
+            #     self.draw_somthing(data_batch)
+            
             del self.data_batch
             self._iter += 1
 
         self.call_hook('after_train_epoch')
         self._epoch += 1
+    @torch.no_grad()
+    def draw_somthing(self, data, **kwargs):
+        img_metas = data['img_metas'].data[0]
+        labels = data['gt_bboxes'].data[0]
+        a = torch.tensor(3.).cuda()
+        target = self.target[a.device]
+        # with torch.no_grad():
+        #     result = self.model(return_loss=False, rescale=True, **data)
+        batch_size = len(labels)
+        if batch_size == 1 and isinstance(data['img'][0], torch.Tensor):
+            img_tensor = data['img'][0]
+        else:
+            img_tensor = data['img'].data[0]
+        imgs = tensor2imgs(img_tensor, **img_metas[0]['img_norm_cfg'])
+        for i,(img_meta,label,img,targ) in enumerate(zip(img_metas,labels,imgs,target)):
+            if i==0:
+                name_ = img_meta['filename'].split('/')[-1].split('.')[0]
+                # img = self.tensor2im(img.detach().data)
+                # print(type(img))
+                
+                for lb in label:
+                    # print(lb)
+                    lb = lb.int()
+                    cv2.rectangle(img, (int(lb[0]),int(lb[1])), (int(lb[2]),int(lb[3])), (250,0,0),5)
+                # img_metas = data['img_metas'][0].data[0]
+                # bbox = data['gt_bboxes'][0].data[0]
+                # imgs = tensor2imgs(img_tensor, **img_metas[0]['img_norm_cfg'])
+                # assert len(imgs) == len(img_metas)
+                # for i, (img, img_meta) in enumerate(zip(imgs, img_metas)):
+                h_, w_, _ = img_meta['img_shape']
+                img_show = img[:h_, :w_, :]
+                PALETTE = None
+                feature = self.offsetMaps
+                h, w = feature["layer2_0"].size(2), feature["layer2_0"].size(3)
+                h_ = h *8
+                w_ = w* 8
+                img_show = mmcv.imresize(img, (w_, h_))
+                p_0_x, p_0_y = torch.meshgrid(
+                    torch.arange(0, h, 1),
+                    torch.arange(0, w, 1))
+                p_0_x = p_0_x.cuda()
+                p_0_y = p_0_y.cuda()
+                temp = []
+                for name in self.offset_name:
+                    h, w = feature[name].size(2), feature[name].size(3)
+                    img1 = copy.deepcopy(img_show)
+                    for i in range(1):
+                        offset_0 = feature[name][0,2*i:2*i+2,:,:].unsqueeze(0)
+                        # print((offset_0==0).all())
+                        stride_h = h_//8//h
+                        stride_w = w_//8//w
+                        _,_,H, W = offset_0.size()
+                        offset_0 = offset_0.repeat(1,1, stride_h, stride_w).view(2,stride_h, H, stride_w, W).permute(0,2, 1, 4, 3).contiguous(). \
+                            reshape(2,stride_h * H, stride_w * W)
+                        if temp !=[]:
+                            p_0_x = temp[0, 0,:,:] + offset_0[0,...]*stride_h
+                            p_0_y = temp[0, 1,:,:] + offset_0[1, ...]*stride_w
+                        else:
+                            p_0_x = p_0_x + offset_0[0,...]*stride_h
+                            p_0_y = p_0_y + offset_0[1,...]*stride_w
 
+                        p_0_x = torch.flatten(p_0_x).view(1, 1, h_//8, w_//8)
+                        p_0_y = torch.flatten(p_0_y).view(1, 1, h_//8, w_//8)
+                        p_0 = torch.cat([p_0_x, p_0_y], 1)
+
+                        for x, y in zip(torch.flatten(p_0[0, 0, :, :]), torch.flatten(p_0[0, 1, :, :])):
+                            H =  int(8*x +4)
+                            W =  int(8*y+ 4)
+                            cv2.circle(img_show, (W, H), 3, (171, 84, 90), -2)
+                            # draw.ellipse((W - 3, H - 3, W + 3 ,
+                            #               H +  3), outline='red', width=5, fill=250)
+                        # original_img.show()
+                        # print(p_0)
+                        # plot_img = draw_objs(img_show,
+                        #                      boxes=predict_boxes,
+                        #                      classes=predict_classes,
+                        #                      scores=predict_scores,
+                        #                      masks=predict_mask,
+                        #                      category_index=category_index,
+                        #                      line_thickness=3,
+                        #                      font='arial.ttf',
+                        #                      font_size=20)
+                        # plt.subplot(2, 4, i + 1)
+                        # print(img_show)
+                        # plt.imshow(img_show)
+                        img_show = np.array(img_show,dtype= np.uint8)
+                        
+                        img_show = Image.fromarray(img_show)
+                        img_show.save(f"{self._iter}_"+name_+"_"+name+"_"+str(i) +".jpg")
+                        img_show = copy.deepcopy(img1)
+                        # break
+                    temp = p_0
+                # t = np.array(targ[:3,...].cpu(),dtype= np.uint8)
+                # print((targ==0).all())
+                t = Image.fromarray(self.tensor2im(targ.repeat(3,1,1)))
+                t.save(f"{self._iter}_"+name_+"_"+str(i) +"target.jpg")
+                    # plt.savefig("temp.jpg")
+                    # plt.show()
+                    # 保存预测的图片结果
+                    # img_show.save("test_result.jpg")
+
+    def tensor2im(self,input_image, imtype=np.uint8):
+        """"
+        Parameters:
+            input_image (tensor) --  输入的tensor，维度为CHW，注意这里没有batch size的维度
+            imtype (type)        --  转换后的numpy的数据类型
+        """
+        # print(input_image.size())
+        mean = [0.485, 0.456, 0.406] # dataLoader中设置的mean参数，需要从dataloader中拷贝过来
+        std = [0.229, 0.224, 0.225]  # dataLoader中设置的std参数，需要从dataloader中拷贝过来
+        if not isinstance(input_image, np.ndarray):
+            if isinstance(input_image, torch.Tensor): # 如果传入的图片类型为torch.Tensor，则读取其数据进行下面的处理
+                image_tensor = input_image.data
+            else:
+                return input_image
+            image_numpy = image_tensor.cpu().float().numpy()  # convert it into a numpy array
+            if image_numpy.shape[0] == 1:  # grayscale to RGB
+                image_numpy = np.tile(image_numpy, (3, 1, 1))
+            # for i in range(len(mean)): # 反标准化，乘以方差，加上均值
+            #     image_numpy[i] = image_numpy[i] * std[i] + mean[i]
+            image_numpy = image_numpy * 255 #反ToTensor(),从[0,1]转为[0,255]
+            # print(image_numpy)
+            image_numpy = np.transpose(image_numpy, (1, 2, 0))  # 从(channels, height, width)变为(height, width, channels)
+            # print(image_numpy)        
+        else:  # 如果传入的是numpy数组,则不做处理
+            image_numpy = input_image
+        return image_numpy.astype(imtype)
     @torch.no_grad()
     def val(self, data_loader, **kwargs):
         self.model.eval()

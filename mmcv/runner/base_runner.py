@@ -109,6 +109,12 @@ class BaseRunner(metaclass=ABCMeta):
         self.optimizer = optimizer
         self.logger = logger
         self.meta = meta
+        self.label = None
+        self.shape =None
+        self.offsetMaps = {}
+        self.features = {}
+        self.offset_name = []
+        self.target = {}
         # create work_dir
         if isinstance(work_dir, str):
             self.work_dir: Optional[str] = osp.abspath(work_dir)
@@ -131,6 +137,8 @@ class BaseRunner(metaclass=ABCMeta):
         self._epoch = 0
         self._iter = 0
         self._inner_iter = 0
+        self.p_0 = None
+
 
         if max_epochs is not None and max_iters is not None:
             raise ValueError(
@@ -140,12 +148,86 @@ class BaseRunner(metaclass=ABCMeta):
         self._max_iters = max_iters
         # TODO: Redesign LogBuffer, it is not flexible and elegant enough
         self.log_buffer = LogBuffer()
+        # print(self.model)
+        # for n,m in self.model.module.backbone.named_children():
+        #     if n in ["layer2", "layer3","layer4"]:
+        #         for name, module in m.named_children():
+        #             self.offset_name.append(n+"_"+name)
+        #             s = n+"_"+name
+        #             m[int(name)].conv2.conv_offset.register_forward_hook(self.get_stepmap(s))
+        #             # m[int(name)].conv2.conv1.register_forward_hook(self.get_stepmap1(s))
+        #     if n in ["layer4"]:
+        #         for name, module in m.named_children():
+        #             # self.offset_name.append(n+"_"+name)
+        #             s = n+"_"+name
+        #             m[int(name)].conv2.conv_offset.register_backward_hook(self.get_gradmap(s))
+            # if n in ["layer1"]:
+            #     for name, module in m.named_children():
+            #         # self.offset_name.append(n+"_"+name)
+            #         s = n+"_"+name
+                    # m[int(name)].conv2.register_forward_hook(self.get_featuremap(s))
+
 
     @property
     def model_name(self) -> str:
         """str: Name of the model, usually the module class name."""
         return self._model_name
-
+    def get_gradmap(self,name):
+        def hook(module, grad_input, grad_output):
+            for i in grad_output:
+                i = i/10
+            # print(f' conv1 {name} weight: {module.weight} in:{input} out:{output} max: {torch.max(module.weight) } min: {torch.min(module.weight) } max: {torch.max(input[0]) } min: {torch.min(input[0]) }')
+            # print({f'input:{name}':input})
+            # print('*****************')
+            # print({f'output:{name}':output})
+        return hook       
+    def get_featuremap(self,name):
+        def hook(module, input, output):
+            print(f' conv1 {name} weight: {module.weight} in:{input} out:{output} max: {torch.max(module.weight) } min: {torch.min(module.weight) } max: {torch.max(input[0]) } min: {torch.min(input[0]) }')
+            # print({f'input:{name}':input})
+            # print('*****************')
+            # print({f'output:{name}':output})
+        return hook    
+    def get_stepmap1(self,name):
+        def hook(module, input, output):
+            print(f"conv1:{name}:weight:{torch.any(torch.isnan(module.weight))} in:{torch.any(torch.isnan(input[0]))}    out:{torch.any(torch.isnan(output))} ")
+            if name == 'layer2_0':
+                print(f' conv1 layer2_0 weight: {module.weight} in:{input} out:{output} max: {torch.max(module.weight) } min: {torch.min(module.weight) } max: {torch.max(input[0]) } min: {torch.min(input[0]) }')
+            # print(module.weight)
+            # self.offsetMaps[name]  = output
+            # print({f'input:{name}':input})
+            # print('*****************')
+            # print({f'output:{name}':output})
+            # self.features[name] = input[0].detach().data
+            # print(f'in:{input[0].detach().data}')
+        return hook
+    def get_stepmap(self,name):
+        def hook(module, input, output):
+            # print(input)
+            # if name=='layer2_0':
+            #     p_0_x, p_0_y = torch.meshgrid(
+            #             torch.arange(0, h, 1),
+            #             torch.arange(0, w, 1))
+            #     p_0_x = torch.flatten(p_0_x).view(1, 1, h, w).repeat(b,1,1,1)   #(b,2,h,w)
+            #     p_0_y = torch.flatten(p_0_y).view(1, 1, h, w).repeat(b,1,1,1)    
+            #     self.p_0 = torch.cat([p_0_x, p_0_y], 1).cuda()
+            # if p_0.size(3) != output.size(3):
+            #     # _,_,h,w = p_0.size()
+            #     p_0= 2*p_0.repeat(1,1,2,2).view(b,2,2, h//2, 2, w//2).permute(0,1,3, 2, 5, 4).contiguous(). \
+            #                 reshape(b,2,h, w)   
+            #     p_0[:,:,1::2,1::2] =  p_0[:,:,1::2,1::2] +1        
+            # p_0 = (p_0 + offsetMap).view(b, 2, h, w)
+            # print(f"{name}:weight:{torch.any(torch.isnan(module.weight))} in:{torch.any(torch.isnan(input[0]))}    out:{torch.any(torch.isnan(output))} ")
+            # print(module.weight)
+            # if name == 'layer2_0':
+            #     print(f' offset layer2_0 in:{input}')
+            self.offsetMaps[name]  = output
+            # print({f'input:{name}':input})
+            # print('*****************')
+            # print({f'output:{name}':output})
+            self.features[name] = input[0].detach().data
+            # print(f'in:{input[0].detach().data}')
+        return hook
     @property
     def rank(self) -> int:
         """int: Rank of current process. (distributed training)"""
@@ -508,7 +590,7 @@ class BaseRunner(metaclass=ABCMeta):
             if isinstance(item, dict):
                 self.register_hook_from_cfg(item)
             else:
-                self.register_hook(item, priority='NORMAL')
+                self.register_hook(item, priority='HIGH')
 
     def register_profiler_hook(
         self,
@@ -564,3 +646,4 @@ class BaseRunner(metaclass=ABCMeta):
         self.register_timer_hook(timer_config)
         self.register_logger_hooks(log_config)
         self.register_custom_hooks(custom_hooks_config)
+        
